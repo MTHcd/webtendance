@@ -1,9 +1,7 @@
-library(dplyr)
-library(readr)
-library(readxl)
-library(haven)
-
-# Data Processing
+library(dplyr) # data processing tydiverse
+library(readr) # csv files
+library(haven) # sas files
+library(rsconnect) # shinyapps
 
 df <- readr::read_csv2("Achats_csv.csv", col_names = TRUE)
 df2 <- readr::read_csv2("Correspondance_sites.csv")
