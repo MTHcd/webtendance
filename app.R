@@ -18,15 +18,11 @@ achats <- achats %>% rename(NUM_SITE = `Num Site`,
                             ID_CLIENT = `Id Client`,
                             NB_ACHAT = `Nb Achat`)
 
-
-
 data <- achats %>%
   left_join(clients, by = "ID_CLIENT") %>%
   left_join(correspondance, by = "NUM_SITE")
 
-data <- data %>% filter(NUM_SITE != 7) %>% mutate(COD_SEXE = 
-                                                    case_when(COD_SEXE == "2" ~ "Femme",
-                                                              COD_SEXE == "1" ~ "Homme"))
+data <- data %>% filter(NUM_SITE != 7)
 
 data$DATE_ACHAT <- as.Date(data$DATE_ACHAT, format = "%d/%m/%Y")
 
@@ -113,7 +109,7 @@ server <- function(input, output, session) {
           )
       p <- ggplot(df, aes(x = Mois, y = Valeur, color = Sexe)) +
         geom_line(size = 1.2) +
-        labs(title = paste("Évolution des ", tolower(input$indicateur), " par sexe"),
+        labs(title = paste("Évolution du", tolower(input$indicateur), "par sexe"),
              x = "Mois", y = input$indicateur) +
         theme_minimal()
     } else if (input$filtre == "Tranche d'âge") {
@@ -126,7 +122,7 @@ server <- function(input, output, session) {
       
       p <- ggplot(df, aes(x = Mois, y = Valeur, color = TrancheAge)) +
         geom_line(size = 1.2) +
-        labs(title = paste("Évolution des", tolower(input$indicateur), "par tranche d'âge"),
+        labs(title = paste("Évolution du", tolower(input$indicateur), "par tranche d'âge"),
              x = "Mois", y = input$indicateur) +
         theme_minimal()
     } else {
