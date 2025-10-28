@@ -48,14 +48,15 @@ ui <- fluidPage(
       selectInput("site", "Site :", choices = c("Tous", unique(df_data$NOM_SITE))),
       dateRangeInput("dates", "Plage de dates :", start = min(df_data$DATE_ACHAT), end = max(df_data$DATE_ACHAT)),
       checkboxGroupInput("filtres", "Filtres :", choices = c("Sexe", "Tranche d'âge")),
+      checkboxGroupInput("tranches", "Tranches d'âge :", 
+                         choices = c("Moins de 30","Entre 30 et 45","Plus de 45"),
+                         selected = c("Moins de 30","Entre 30 et 45","Plus de 45")),
       checkboxGroupInput("graphiques", "Graphiques :", choices = c("Évolution", "Carte"), selected = c("Évolution","Carte")),
       checkboxInput("show_points", "Afficher les points", value = TRUE),
       checkboxInput("show_smooth", "Afficher interpolation / lissage", value = TRUE)
     ),
-    checkboxGroupInput("tranches", "Tranches d'âge :", 
-                       choices = c("Moins de 30","Entre 30 et 45","Plus de 45"),
-                       selected = c("Moins de 30","Entre 30 et 45","Plus de 45")),
     mainPanel(
+      # Organisation côté à côte
       uiOutput("plots_ui")
     )
   )
@@ -65,7 +66,6 @@ ui <- fluidPage(
 server <- function(input, output, session) {
   
   # --- Filtrage dynamique ---
-  # --- Filtrage dynamique avec tranche d'âge ---
   df_data_filtre <- reactive({
     df <- df_data
     if(input$site != "Tous") df <- df %>% filter(NOM_SITE == input$site)
@@ -73,13 +73,12 @@ server <- function(input, output, session) {
     
     if("Sexe" %in% input$filtres) df <- df %>% mutate(Sexe = recode(COD_SEXE,"1"="Homme","2"="Femme"))
     
-    # Filtrer tranches d'âge si sélectionnées
     if("Tranche d'âge" %in% input$filtres & !is.null(input$tranches)){
       df <- df %>% filter(TrancheAge %in% input$tranches)
     }
+    
     df
   })
-  
   
   # --- Graphique évolution ---
   output$evolution_plot <- renderPlotly({
@@ -103,34 +102,31 @@ server <- function(input, output, session) {
     
     color_var <- setdiff(group_vars,"Mois")
     
-    # Ajouter la colonne text pour tooltip
+    # --- Création du plot ---
     if(length(color_var) == 0){
-      df <- df %>% mutate(text = paste0("Mois: ", Mois,
-                                        "<br>Montant (€): ", Montant,
-                                        "<br>Nb Achats: ", NbAchats))
-      p <- ggplot(df, aes(x=Mois, y=Valeur, text=text))
+      p <- ggplot(df, aes(x=Mois, y=Valeur,
+                          text=paste0("Mois: ", Mois,
+                                      "<br>Nb Achats: ", NbAchats,
+                                      "<br>Montant (€): ", Montant)))
       if(input$show_points) p <- p + geom_point(color="#254", size=3)
       p <- p + geom_line(color="#254", size=1.5)
       if(input$show_smooth) p <- p + geom_smooth(method="loess", se=FALSE, linetype="dashed", color="#254")
     } else {
-      # Interaction pour couleur
       df <- df %>% mutate(group_color = interaction(!!!syms(color_var)))
       
-      # Tooltip
-      df <- df %>% mutate(text = paste0("Mois: ", Mois,
-                                        "<br>", paste(paste(color_var, df[,color_var], sep=": "), collapse="<br>"),
-                                        "<br>Montant (€): ", Montant,
-                                        "<br>Nb Achats: ", NbAchats))
+      # Tooltip simplifié (affiche seulement la première variable de groupe)
+      p <- ggplot(df, aes(x=Mois, y=Valeur, color=group_color,
+                          text=paste0("Mois: ", Mois,
+                                      "<br>", color_var[1], ": ", df[[color_var[1]]],
+                                      "<br>Nb Achats: ", NbAchats,
+                                      "<br>Montant (€): ", Montant))) +
+        geom_line(size=1.5)
+      if(input$show_points) p <- p + geom_point(size=3)
+      if(input$show_smooth) p <- p + geom_smooth(method="loess", se=FALSE,
+                                                 aes(group=group_color), linetype="dashed")
       
       n_colors <- length(unique(df$group_color))
       palette_colors <- RColorBrewer::brewer.pal(min(n_colors,8),"Set2")
-      
-      p <- ggplot(df, aes(x=Mois, y=Valeur, color=group_color, text=text))
-      if(input$show_points) p <- p + geom_point(size=3)
-      p <- p + geom_line(size=1.5)
-      if(input$show_smooth) p <- p + geom_smooth(method="loess", se=FALSE,
-                                                 linetype="dashed",
-                                                 aes(group=group_color))
       p <- p + scale_color_manual(values=palette_colors)
     }
     
@@ -191,7 +187,7 @@ server <- function(input, output, session) {
         values=variable,
         opacity=0.7,
         title=legend_title,
-        position="bottomright"  # position valide
+        position="bottomright"
       )
   })
   
@@ -199,19 +195,19 @@ server <- function(input, output, session) {
   output$plots_ui <- renderUI({
     plot_outputs <- list()
     
-    if("Évolution" %in% input$graphiques){
-      plot_outputs <- append(plot_outputs, list(plotlyOutput("evolution_plot", height="500px")))
+    # Créer deux colonnes si les deux graphiques sont sélectionnés
+    if("Évolution" %in% input$graphiques & "Carte" %in% input$graphiques){
+      fluidRow(
+        column(6, plotlyOutput("evolution_plot", height="500px")),
+        column(6, leafletOutput("map", height="500px"))
+      )
+    } else if("Évolution" %in% input$graphiques){
+      plotlyOutput("evolution_plot", height="500px")
+    } else if("Carte" %in% input$graphiques){
+      leafletOutput("map", height="500px")
+    } else {
+      tags$div("Aucun graphique sélectionné")
     }
-    
-    if("Carte" %in% input$graphiques){
-      plot_outputs <- append(plot_outputs, list(leafletOutput("map", height="500px")))
-    }
-    
-    if(length(plot_outputs) == 0){
-      return(tags$div("Aucun graphique sélectionné"))
-    }
-    
-    tagList(plot_outputs)
   })
   
 }
