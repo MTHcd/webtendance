@@ -1,4 +1,5 @@
 library(shiny)
+library(rsconnect)
 library(tidyverse)
 library(readr)
 library(haven)       
@@ -32,7 +33,6 @@ data <- data %>%
     2025 - year(data$DATE_NAIS) >= 30 & 2025 - year(data$DATE_NAIS) <= 45 ~ "Entre 30 et 45",
     2025 - year(data$DATE_NAIS) > 45 ~ "Plus de 45"
   ))
-
 
 ui <- fluidPage(
   titlePanel("Suivi des ventes e-commerce - Groupe Webtendance"),
