@@ -1,4 +1,5 @@
 library(shiny)
+library(bslib) # existing themes for the UI
 library(shinythemes)
 library(tidyverse)
 library(lubridate)
@@ -20,13 +21,17 @@ achats <- achats %>% rename(
   NB_ACHAT = `Nb Achat`
 )
 
+# joining the three datasets and deleting when NUM_SITE == 7
 df_data <- achats %>%
   left_join(clients, by = "ID_CLIENT") %>%
   left_join(correspondance, by = "NUM_SITE") %>%
   filter(NUM_SITE != 7)
 
+
+# formatting in date format
 df_data$DATE_ACHAT <- as.Date(df_data$DATE_ACHAT, format="%d/%m/%Y")
 
+# creating a new column containing different ages
 df_data <- df_data %>%
   mutate(
     TrancheAge = case_when(
@@ -38,15 +43,26 @@ df_data <- df_data %>%
 
 # ====== UI ======
 ui <- fluidPage(
+  # modify the theme with:
+  # bslib::bs_theme_names()
+  # choose among e.g: "cosmo", "lux", "simplex"...
   theme = shinytheme("flatly"),
+  # 
   titlePanel("Dashboard e-commerce - Groupe Webtendance"),
   
+  #
   sidebarLayout(
+    #
     sidebarPanel(
+      # width of the sidebarpanel
       width = 3,
+      # selectInput() => choose among ...
       selectInput("indicateur", "Indicateur :", choices = c("Nombre d'achats", "Montant des achats")),
       selectInput("site", "Site :", choices = c("Tous", unique(df_data$NOM_SITE))),
+      # dateRangeInput() => choose between two dates... 
+      # modify to choose between MONTH/YEAR (1) and MONTH/YEAR (2)
       dateRangeInput("dates", "Plage de dates :", start = min(df_data$DATE_ACHAT), end = max(df_data$DATE_ACHAT)),
+      # 
       checkboxGroupInput("filtres", "Filtres :", choices = c("Sexe", "Tranche d'âge")),
       checkboxGroupInput("tranches", "Tranches d'âge :", 
                          choices = c("Moins de 30","Entre 30 et 45","Plus de 45"),
