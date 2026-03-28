@@ -1,0 +1,183 @@
+# --- Bibliothèques ---
+library(shiny)
+library(tidyverse)
+library(haven)
+library(lubridate)
+library(leaflet)
+library(plotly)
+library(shinydashboard)
+library(shinyWidgets)
+library(htmltools)
+library(sf)
+library(bslib)
+
+# --- 1. Préparation des données (ETL) ---
+# Chargement
+achats <- read_delim("Achats_csv.csv", delim = ';', show_col_types = FALSE)
+clients <- read_sas("clients.sas7bdat")
+correspondance <- read_delim("Correspondance_sites.csv", delim = ';', show_col_types = FALSE)
+dept_reg <- read_csv("departements-france.csv", col_names = TRUE, show_col_types = FALSE)
+
+# Nettoyage et Jointure
+achats <- achats %>% rename(
+  NUM_SITE = `Num Site`,
+  DATE_ACHAT = `Date Achat`,
+  MNT_ACHAT = `Mnt Achat`,
+  ID_CLIENT = `Id Client`,
+  NB_ACHAT = `Nb Achat`
+)
+
+# Création du dataset global (Renommé pour éviter l'erreur 'closure')
+df_global <- achats %>%
+  left_join(clients, by = "ID_CLIENT") %>%
+  left_join(correspondance, by = "NUM_SITE") %>%
+  filter(NUM_SITE != 7)
+
+df_global$DATE_ACHAT <- as.Date(df_global$DATE_ACHAT, format = "%d/%m/%Y")
+
+# Feature Engineering
+df_global <- df_global %>%
+  mutate(
+    TrancheAge = case_when(
+      2025 - year(DATE_NAIS) < 30 ~ "Moins de 30",
+      2025 - year(DATE_NAIS) >= 30 & 2025 - year(DATE_NAIS) <= 45 ~ "Entre 30 et 45",
+      2025 - year(DATE_NAIS) > 45 ~ "Plus de 45"
+    ),
+    CODE_DEPT = substr(COD_POSTAL, 1, 2)
+  ) %>%
+  left_join(dept_reg %>% select(code_departement, code_region), 
+            by = c("CODE_DEPT" = "code_departement"))
+
+# --- 2. Interface Utilisateur (UI) ---
+ui <- page_navbar(
+  title = "Webtendance | Suivi E-commerce",
+  theme = bs_theme(
+    version = 5,
+    bootswatch = "darkly", # Thème sombre moderne
+    primary = "#00bc8c"
+  ),
+  
+  # Onglet 1 : Temporel
+  nav_panel(
+    title = "📈 Évolution",
+    layout_sidebar(
+      sidebar = sidebar(
+        title = "Filtres",
+        selectInput("indicateur", "Indicateur :", 
+                    choices = c("Volume de ventes", "Chiffre d'affaire")),
+        selectInput("site", "Site :", 
+                    choices = c("Tous", unique(df_global$NOM_SITE))),
+        airDatepickerInput(
+          inputId = "dates",
+          label = "Plage de dates :",
+          range = TRUE,
+          view = "months",
+          minView = "months",
+          dateFormat = "MM yyyy",
+          value = c(min(df_global$DATE_ACHAT), max(df_global$DATE_ACHAT)),
+          autoClose = TRUE
+        ),
+        hr(),
+        switchInput("filter_active", "Segmenter le graphique", value = FALSE, size = "small"),
+        conditionalPanel(
+          condition = "input.filter_active == true",
+          selectInput("filter_choice", "Grouper par :", choices = c("Sexe", "Tranche d'âge"))
+        )
+      ),
+      card(
+        card_header("Analyse des tendances"),
+        plotlyOutput("evolution_plot", height = "500px"),
+        full_screen = TRUE
+      )
+    )
+  ),
+  
+  # Onglet 2 : Spatial
+  nav_panel(
+    title = "🗺️ Géographie",
+    layout_sidebar(
+      sidebar = sidebar(
+        title = "Paramètres Carte",
+        radioButtons("level", "Niveau :", choices = c("Département", "Région")),
+        selectInput("map_ind", "Indicateur :", choices = c("Volume de ventes", "Chiffre d'affaire"))
+      ),
+      card(
+        card_header("Répartition Géographique"),
+        leafletOutput("map", height = "600px"),
+        full_screen = TRUE
+      )
+    )
+  )
+)
+
+# --- 3. Serveur ---
+server <- function(input, output, session) {
+  
+  # Données réactives filtrées
+  data_filtre <- reactive({
+    df <- df_global
+    if (input$site != "Tous") df <- df %>% filter(NOM_SITE == input$site)
+    
+    # Sécurité pour les dates
+    req(input$dates)
+    df %>% filter(DATE_ACHAT >= input$dates[1], DATE_ACHAT <= input$dates[2])
+  })
+  
+  # Graphique Evolution
+  output$evolution_plot <- renderPlotly({
+    df <- data_filtre() %>% mutate(Mois = floor_date(DATE_ACHAT, "month"))
+    
+    # Calcul dynamique du KPI
+    kpi_expr <- if(input$indicateur == "Volume de ventes") quote(sum(NB_ACHAT)) else quote(sum(MNT_ACHAT/1000000))
+    
+    if (input$filter_active) {
+      group_var <- if(input$filter_choice == "Sexe") {
+        df <- df %>% mutate(Sexe = recode(COD_SEXE, "1"="Homme", "2"="Femme"))
+        quote(Sexe)
+      } else {
+        quote(TrancheAge)
+      }
+      
+      df_plot <- df %>% group_by(Mois, !!group_var) %>% summarise(Valeur = !!kpi_expr, .groups = 'drop')
+      p <- ggplot(df_plot, aes(x = Mois, y = Valeur, color = !!group_var))
+    } else {
+      df_plot <- df %>% group_by(Mois) %>% summarise(Valeur = !!kpi_expr, .groups = 'drop')
+      p <- ggplot(df_plot, aes(x = Mois, y = Valeur))
+    }
+    
+    p <- p + geom_line(size = 1) + geom_point() + theme_minimal() + labs(x = "", y = "")
+    ggplotly(p) %>% layout(legend = list(orientation = "h", y = -0.2))
+  })
+  
+  # Carte Leaflet
+  output$map <- renderLeaflet({
+    df <- data_filtre()
+    
+    if (input$level == "Département") {
+      ventes <- df %>% group_by(CODE_DEPT) %>% 
+        summarise(Val = if(input$map_ind == "Volume de ventes") sum(NB_ACHAT) else sum(MNT_ACHAT/1000000))
+      map_data <- st_read("departements.geojson", quiet = TRUE) %>% left_join(ventes, by=c("code"="CODE_DEPT"))
+    } else {
+      ventes <- df %>% group_by(code_region) %>% 
+        summarise(Val = if(input$map_ind == "Volume de ventes") sum(NB_ACHAT) else sum(MNT_ACHAT/1000000))
+      map_data <- st_read("regions.geojson", quiet = TRUE) %>% left_join(ventes, by=c("code"="code_region"))
+    }
+    
+    map_data$Val[is.na(map_data$Val)] <- 0
+    pal <- colorNumeric("YlGnBu", domain = map_data$Val)
+    
+    leaflet(map_data) %>%
+      addProviderTiles(providers$CartoDB.Positron) %>%
+      setView(lng = 2.2, lat = 46.2, zoom = 5) %>%
+      addPolygons(
+        fillColor = ~pal(Val),
+        weight = 1, color = "white", fillOpacity = 0.7,
+        label = ~paste0(nom, " : ", round(Val, 2)),
+        highlightOptions = highlightOptions(weight = 3, color = "black", bringToFront = TRUE)
+      ) %>%
+      addLegend(pal = pal, values = ~Val, title = input$map_ind, position = "bottomright")
+  })
+}
+
+# Lancement
+shinyApp(ui, server)
